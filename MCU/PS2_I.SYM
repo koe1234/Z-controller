@@ -1,0 +1,840 @@
+; контроллер PS2 клавиатуры/мыши для ZX-SPECTRUM
+; BY KINGOFEVIL, год 2OO7 от р.х.
+;
+; Тактовая частота микроконтроллера 8 МГц
+; Назначение выводов микроконтроллера:
+;
+;  PS2: PA4 - CLK
+;       PA3 - DATA
+;
+;  PB7..PB0 - данные
+;
+;  PA0 - если 0, то подключить клавиатуру к PS2 интерфейсу
+;        если 1, то подключена мышь
+;  PA1 - сброс регистров в ПЛИС  
+;  PA2 - строб для приема информации с PB7..PB0 (прием по переднему фронту
+;        в сдедующей последовательности: клавиатура, мышь X, мышь Y, мышь кн.
+;        Через PB7..PB0 будет передано 8 байтов, которые нужно принимать в ПЛИС
+;        последовательно с каждым фронтом импульса на PA2)
+
+
+; область векторов прерываний
+
+        JMP START0 ;<0>  Начальный пуск программы
+        NOP        ;<1>  Сторожевой таймер
+        JMP STERR  ;<2>  выход за границу стека
+        JMP SC_M   ;<3>  Таймер A
+        NOP        ;<4>  не используется
+        NOP        ;<5>  не используется
+        JMP SC_KEY ;<6>  Порт A
+        NOP        ;<7>  Порт B
+        NOP        ;<8>  не используется
+        NOP        ;<9>  не используется
+        NOP        ;<10> не используется
+        NOP        ;<11> не используется
+        NOP        ;<12> не используется
+        NOP        ;<13> не используется
+        NOP        ;<14> не используется
+        RST        ;<15> Завершение записи в флэш
+
+
+START0: LDR #A,0   ; Сегмент A - рабочие регистры портов
+        LDR #B,18H ; Сегмент B - регистры конфигурации портов
+        LDR #C,64  ; Сегмент С - переменные
+        LDR #D,80  ; Сегмент D - переменные
+
+        MOVL %B1,00111011B ; Установка конфигурации порта A
+        MOVL %B1,00000110B
+        MOVL %B1,00011111B
+        MOVL %B1,00000000B
+        MOVL %B1,00000000B
+        MOVL %B1,00000000B ; прерывание по отрицательному перепаду уровня
+
+        MOVL %B2,00011011B ; Установка конфигурации порта B
+        MOVL %B2,11111111B
+        MOVL %B2,11111111B
+        MOVL %B2,0
+        MOVL %B2,0
+        MOVL %B2,0
+
+        BISL %A1,0010B     ; выдаем 1 на линию сброса регистров в ПЛИС
+        BICL %A1,0100B     ; выдаем 0 на линию STROBE
+
+        JSR KEYINI
+        
+        BICL %A1,0010B 
+        NOP
+        NOP
+        BISL %A1,0100B
+               
+        JSR MOUSINI
+        
+        JSR REZET
+
+        JSR TIMER
+
+START:  LDR #A,0   ; Сегмент A - рабочие регистры портов
+        LDR #B,18H ; Сегмент B - регистры конфигурации портов
+        LDR #C,64  ; Сегмент С - переменные
+        LDR #D,80  ; Сегмент D - переменные
+
+        JSR INIT           ; инициализируем порты
+
+        JSR KEYINI
+
+        JSR TIMER          ; инициализируем прерывания от таймера
+
+        ;MOVL %D0,0
+        JSR RDFLSH
+
+MAIN:   BICL %D5,0010B
+        BTTL %D5,0001B
+        JNZ CLM
+       
+        JMP MAIN          ; и есчо разок ...
+
+CLM:    CMPL %D4,255
+        JZ MAIN            ; если мышь не была расползнана при инициализации
+        MOVL %A4,0         ; тормозим счетчик и запрещаем прерывания от него
+        JSR WAIT           ; ожидаем готовность мыши
+        MOVL %C3,11101011B ; код команды запроса состояния
+        JSR WR_SC          ; засылаем в мышь
+        JSR MORE           ; принимаем ответ
+        CMPL %C3,11111010B ; все о.к. ?
+        JNZ CLM            ; видимо, нет
+        JSR MORE           ; ну а если все о.к., то принимаем еще 3 байта
+        LDR #B,72
+        MOV %B7,%C3 ; ZZ
+        JSR MORE
+        JSR MASHTB      
+        LDR #B,72
+        ADD %B5,%C3 ; XX
+
+        JSR MORE
+        
+        JSR MASHTB
+        LDR #B,72
+        ADD %B6,%C3 ; YY
+        
+        BISH %B7,1111B    ; обрабатываем данные о нажатых кнопках мыши
+        BICL %B7,1000B
+        BTGL %B7,1111B
+                 
+        BICL %D5,0001B    ; CLEAR MOUSE INTERRUPTION BIT
+        
+        JSR VYVOD         ; закачиваем данные в ПЛИС
+
+
+               
+        BTTL %D5,0010B
+        JNZ EXI1
+
+EXI:    JSR TIMER
+EXI1:   MOVL %D5,0
+        MOVL %A4,00000011B
+        JMP MAIN
+
+MASHTB: MOV %D1,D0      ; грузим в D1 коэффициент замедления мышки
+        CMPL %D1,0
+        JZ VJOPU
+        CMPL %C3,0
+        JZ VJOPU        
+
+        CMPL %C3,128
+        JS MSH1 ; если меньше 128
+        MOVL %D2,10000000B;
+
+MSH0:   SHR %C3
+        SHRA %D2
+        DEC %D1
+        JNZ MSH0
+
+        SHL %D2         ; нужно установить столько старших разрядов, сколько
+                        ; сдвигов было проделано (иначе стрелка будет 
+                        ; дергаться из-за того, что вместо уменьшения координат
+                        ; произойдет их увеличение). В D2 теперь как раз и будет
+                        ; установлено нужное количество старших разрядов.
+
+        OR %C3,%D2
+        
+        RTS
+
+MSH1:   MOV %D1,%D0
+MSH2:   SHR %C3
+        DEC %D1
+        JNZ MSH2
+        
+        CMPL %C3,0
+        JNZ VJOPU
+        MOVL %C3,1
+
+VJOPU:  RTS
+
+
+VYVOD:                     ; закачка данных в ПЛИС
+        BICL %A1,0010B     ; сбрасываем регистры в ПЛИС
+        NOP
+        NOP
+        BISL %A1,0010B     ; снимаем сигнал сброса
+        LDR #B,72   
+        MOV %A2,%B0        ; понеслась :-)
+        JSR STROBE
+        MOV %A2,%B1
+        JSR STROBE
+        MOV %A2,%B2
+        JSR STROBE
+        MOV %A2,%B3
+        JSR STROBE
+        MOV %A2,%B4
+        JSR STROBE
+        OR %B5,%D4
+        MOV %A2,%B5
+        JSR STROBE
+        OR %B6,%D4
+        MOV %A2,%B6
+        JSR STROBE
+        OR %B7,%D4
+        MOV %A2,%B7
+        JSR STROBE
+        MOVL %A2,0
+        LDR #B,18H
+        RTS
+
+STROBE: BISL %A1,0100B ; даем строб
+        NOP
+        NOP
+        BICL %A1,0100B ; снимаем строб
+        RTS
+
+SC_M:   CLIE
+        MOV %C3,%A4
+        BISL %D5,0001B
+        STIE
+        RTI
+
+
+
+SC_KEY: CLIE               ; запрещаем прерывания
+        MOV %C3,%A1        ; снимаеи сигнал запроса прерывания                                                      +
+;       MOV %C3,%A4
+        MOVL %A4,00000000B ; тормозим счетчик и запрещаем прерывания от него
+;       MOVL %A4,00000110B
+;       MOVL %A5,150
+;       MOVL %A4,0
+
+        PUSH #B
+        LDR #B,18H
+        MOVL %B1,00101011B
+        MOVL %B1,00000111B ; разрешаем запись в PA0
+        BICL %A1,0001B     ; захватываем сигнал переключения на клавиатуру
+        BISL %D5,0010B     ; устанавливаем флаг прерывания от клавиатуры
+       
+        JSR KEY
+        JSR VYVOD
+
+        LDR #B,18H
+        MOVL %B1,00101011B
+        MOVL %B1,00000110B ; запрещаем запись в PA0
+
+        MOVL %A4,00000110B ; подключаем регистр интервала (HI) к адресу 5
+        MOVL %A5,150        
+        MOVL %A4,00000011B ; запускаем счетчик и разрешаем прерывания от него
+        POP #B
+
+
+        STIE
+        RTI
+
+; ****
+
+KEY:    MOVL %C4,0
+        MOVL %C5,0
+        JSR RD_SC               ; Ура! Начинаем принимать скан-код! 
+        MOV %C4,%C3
+        CMPL %C4,11100000B      ; принимать второй байт скан-кода?
+        JZ KEY1
+        CMPL %C4,11100001B
+        JZ KEY1
+        JMP CONTTT
+KEY1:   BISL %C5,0010B          ; устанавливаем флажок          
+        JSR MORE
+        MOV %C4,%C3    
+
+CONTTT: CMPL %C4,7              ; если нажата кнопка F12, то даем RESET
+        JZ REZT
+        CMPL %C4,078H
+        JNZ CONTTZ
+        JSR NMI
+CONTTZ: CMPL %C4,0              ; если была ошибка, то считаем, что был
+                                ; принят код отжатия. Понимаю, что лажа, но
+                                ; почему-то в 99% случаев ошибки происходят
+                                ; именно при приеме кода отжатия. Уж не знаю,
+                                ; почему. Спишем на ламерство изобретателей
+                                ; PS2 интерфейса (ну не признавать же свою
+                                ; криворукость 
+        JZ PODGON
+        CMPL %C4,11110000B      ; это был код отжатой клавиши?
+        JZ PODGON
+        CMPL %C4,11110001B
+        JZ PODGON
+        JMP CONTT0
+PODGON: BISL %C5,0001B          ; устанавливаем флажок
+        JSR MORE                ; принимаем еще один скан-код - код отжатой 
+        MOV %C4,%C3             ; клавиши 
+
+CONTT0: BTTL %C5,0010B
+        JZ CONTTA
+
+CONTT1: CMPL %C4,00010001B ; правый ALT = левый ALT = SYMBOL SHIFT
+        JZ CONTT2
+
+EX5:    CMPL %C4,74H
+        JNZ EX6
+        JSR SHIFT
+        MOVL %C4,3EH
+
+EX6:    CMPL %C4,6BH
+        JNZ EX7
+        JSR SHIFT
+        MOVL %C4,2EH
+
+EX7:    CMPL %C4,75H       ; UP
+        JNZ EX8
+        JSR SHIFT
+        MOVL %C4,3DH
+        
+EX8:    CMPL %C4,72H       ; DOWN
+        JNZ EX9
+        JSR SHIFT
+        MOVL %C4,36H
+
+EX9:    CMPL %C4,71H       ; BACKSPACE = DEL
+        JNZ CONTT2
+        JSR BACKSP 
+        JMP CONTT2
+
+CONTTA: CMPL %C4,66H            ; это клавиша BACKSPACE?
+        JNZ CONTTD
+        JSR BACKSP              ; если да, то ставим в соответсвие CAPS+0
+
+CONTTD: CMPL %C4,59H            ; правый SHIFT = левый SHIFT = CAPS SHIFT
+        JNZ CONTTW
+        MOVL %C4,12H
+
+CONTTW: CMPL %C4,0DH            ; TAB = EDIT = CAPS + 0
+        JNZ CONTE
+        JSR SHIFT
+        MOVL %C4,16H
+
+CONTE:  CMPL %C4,58H            ; CAPS LOCK = CAPS + 2
+        JNZ CONTE1
+        JSR SHIFT
+        MOVL %C4,1EH
+
+CONTE1: CMPL %C4,049H ; точка
+        JNZ CONTE2
+        JSR SSHIFT
+        MOVL %C4,03AH
+
+CONTE2: CMPL %C4,041H ; запятая
+        JNZ CONTE3
+        JSR SSHIFT
+        MOVL %C4,031H
+
+CONTE3: CMPL %C4,055H  ; =
+        JNZ CONTE4
+        JSR SSHIFT
+        MOVL %C4,004BH
+
+CONTE4: CMPL %C4,04EH  ; -
+        JNZ CONTE5
+        JSR SSHIFT
+        MOVL %C4,03BH
+
+CONTE5: CMPL %C4,6
+        JNZ CONTE6
+        BTTL %C5,0001B
+        JNZ CONTE6
+        INC %D0   ; F2 - увеличения коэффициента замедления мышки
+        
+CONTE6: CMPL %C4,4
+        JNZ CONTE7
+        BTTL %C5,0001B
+        JNZ CONTE7
+        DEC %D0 ; F3 - уменьшение коэффициента замедления мышки
+        CMPL %D0,255
+        JNZ CONTE7
+        MOVL %D0,0
+
+CONTE7: CMPL %C4,5
+        JNZ CONTT2
+        JSR WRFLSH ; - F1 - сохранение коэффициента замедления во FLASH - память
+
+CONTT2: MDAL %C1,SCODE
+        MDAH %C2,SCODE      ; Грузим в регистр косвенной адресации адрес
+        MTPR #6,%C1         ; таблицы скан-кодов в памяти команд
+        MTPR #7,%C2         ; (вся хрень с автоинкрементом, доступ через D7) 
+                
+CCD:    MOVL %C1,72
+CYCK0:  MOVL %C6,8         ; 8 бит
+        MOVL %C2,11111110B ; стартовое значение
+CYCK1:  MOV %C3,D7         ; берем скан-код из таблицы
+        CMP %C3,%C4        ; совпал с прочитанным?
+        JZ SKEY            ; если совпал то идем на SKEY
+        SST 0001B          ; устанавливаем флаг C
+        RLC %C2            ; смотрим следующий вариант
+        DEC %C6
+        JNZ CYCK1
+        INC %C1
+        CMPL %C1,77        ; проверили все 5 наборов по 8 клавиш
+        JNZ CYCK0
+        MOVL %C4,0
+        RTS
+
+PPODGON:JSR KEYINI
+        JMP PODGON
+
+         
+SKEY:   MTPR #4,%C1
+        MOVL %C1,01000000B
+        MTPR #5,%C1
+        BTTL %C5,0001B
+        JNZ RESKEY 
+        AND %D6,%C2        ; фиксируем нажатие клавиши
+        MOVL %C4,0
+        RTS
+RESKEY: NOT %C2
+        OR %D6,%C2         ; фиксируем отжатие клавиши
+        MOVL %C4,0
+        RTS ; Усё       
+
+MORE:   MOVL %C0,222       ; будем ждать (3*45+3)*222 команд 
+WT0:    MOVL %C1,45       ; если за это время не поступит новый байт
+WT1:    MOV %C2,%A1        ; данных, то выходим по ошибке
+        BTTH %C2,0001B;
+        JZ WT2
+        DEC %C1
+        JNZ WT1
+        DEC %C0
+        JNZ WT0;
+        RTS     
+WT2:    JSR RD_SC
+        RTS
+
+BACKSP: JSR SHIFT       ; DEL = SHIFT+0 обрабатываем SHIFT
+        MOVL %C4,45H    ; подсовываем скан-код нуля
+        RTS
+
+SHIFT:  LDR #B,72
+        BTTL %C5,0001B
+        JNZ RSHIFT 
+        BICL %B0,0001B       ; фиксируем нажатие клавиши
+        LDR #B,18H
+        RTS
+RSHIFT: BISL %B0,0001B       ; фиксируем отжатие клавиши
+        LDR #B,18H
+        RTS      
+
+SSHIFT: LDR #B,72
+        BTTL %C5,0001B
+        JNZ RSSHIFT 
+        BICH %B1,1000B       ; фиксируем нажатие клавиши
+        LDR #B,18H
+        RTS
+RSSHIFT:BISH %B1,1000B       ; фиксируем отжатие клавиши
+        LDR #B,18H
+        RTS      
+
+NMI:    BICL %A1,0010B     ; даем сигнал сброса
+        MOVL %A2,1         ; даем DATA0 = 1 (теперь на выходе NMI ПЛИС
+                           ; появится 0)
+        NOP
+        NOP
+        NOP
+        NOP
+        MOVL %A2,0         ; убираем 1 на DATA0
+        BISL %A1,0010B     ; снимаем сигнал сброса
+        RTS             
+
+; **************************************************************
+
+RD_SC:  ; Процедура чтения байта скан-кода
+
+        MOVL %C3,0 ; Будем читать в C3. Начальное значение 0
+        MOV %C1,%A1
+        BTTL %C1,1000B ; проверяем стартовый бит
+;       JNZ ERROR 
+                  ; скан-код
+
+        MOVL %C2,8 ; будем читать 8 бит
+SCAN1:  JSR WAIT
+        JSR WAIT1 ; идем на процедуру ожидания следующего такта 
+        SHR %C3
+        MOV %C1,%A1
+        BTTL %C1,1000B
+        JZ SCAN2
+        BISH %C3,1000B ; если DATA=1, то ставим эту 1 в C3
+SCAN2:  DEC %C2
+        JNZ SCAN1
+        JSR WAIT ; Байт скан-кода вроде бы прочитали, теперь надо принять бит
+                 ; четности и затем стоповый бит.
+        JSR WAIT1; На бит четности сразу же кладем, ибо нафиг он не нужен
+        
+        JSR WAIT
+        JSR WAIT1
+        MOV %C1,A1
+        BTTL %C1,1000B ; Проверяем стоповый бит
+
+;       JZ ERROR 
+        JSR WAIT ; ждем прихода в исходное состояние
+        RTS        
+
+; ******************************************************************
+
+WR_SC:  ; Процедура передачи байта скан-кода
+        ; Чтобы перейти в режим передачи данных, нужно удерживать 0 на линии
+        ; CLK не менее 60 мкс. На всякий случай будем держать 0 80 мкс.
+        ; 80 это 320 команд (640 тактов) при F=8 МГц
+
+        MOVL %B1,00101011B ; будем писать в подрегистр типа вывода порта A
+        MOVL %B1,00011110B
+
+        BICH %A1,0001B     ; выдаем 0 в CLK и DATA
+        BICL %A1,1000B
+
+        MOVL %C0,64 ; Ждем 64*5=320 команд 
+REPL:   NOP
+        NOP
+        NOP
+        
+        NOP ; было 3
+        NOP
+        DEC %C0
+        JNZ REPL;
+        
+        BISH %A1,0001B ; снимаем 0 CLK
+        MOVL %B1,00101011B ; будем писать в подрегистр типа вывода порта A
+        MOVL %B1,00001110B ; переводим CLK на чтение
+        BICL %A1,1000B
+
+        MOVL %C0,1 ; это будет счетчик единичных битов для формирования
+                   ; бита четности
+
+W1:     MOVL %C7,255   ; ждем 0, т.е. начала тактирования процесса
+W2:     BTTH %A1,0001B
+        JZ E1
+        NOP
+        NOP
+        NOP
+        NOP
+        NOP
+        DEC %C7
+        JNZ W2
+E1:
+                   ; передачи данных девайсом
+        MOVL %C2,8 ; будем передавать 8 бит
+WR_0:              ; передаем бит
+
+WR1:    SHR %C3
+        JC WR2
+        BICL %A1,1000B
+        JMP WR3
+
+WR2:    BISL %A1,1000B
+        INC %C0         ; добавляем 1 к счетчику
+WR3:    BTTH %A1,0001B  ; ждем 1 на CLK
+        JZ WR3;
+
+         ; ожидаем защелкивания бита данных девайсом и его
+         ; готовности к приему следующего бита (0 на CLK)
+
+        MOVL %C7,255
+WW2:    BTTH %A1,0001B
+        JZ EE1
+        NOP
+        NOP
+        NOP
+        NOP
+        NOP
+        DEC %C7
+        JNZ WW2
+
+EE1:    DEC %C2
+        JNZ WR_0 
+        
+                 ; Байт скан-кода вроде бы передали, теперь надо передать бит
+                 ; четности и затем принять стоповый бит. Мля, ну какие же
+                 ; ламеры придумали этот PS2 интерфейс :-E
+
+        MOVL %C3,0
+        SHR %C0  ; Значение бита четности берем из 0-го разряда %C0
+        JNC BCNZ ; Если бит четности =0
+        BISL %C3,1 ; если бит четности =1
+
+BCNZ:   ; передаем 
+
+        SHR %C3
+        JC WRR2
+        BICL %A1,1000B
+        JMP WRR3
+
+WRR2:   BISL %A1,1000B
+        INC %C0   ; добавляем 1 к счетчику
+
+WRR3:   ; ждем 1
+        BTTH %A1,0001B
+        JZ WRR3;
+
+        ; ожидаем защелкивания бита данных девайсом и его
+        ; готовности к приему следующего бита
+
+        MOVL %C7,255   ; ждем 0
+WWA1:   BTTH %A1,0001B
+        JZ EEX
+        NOP
+        NOP
+        NOP
+        NOP
+        NOP
+        DEC %C7
+        JNZ WWA1
+
+EEX:    MOVL %B1,00101011B ; будем писать в подрегистр типа вывода порта A
+        MOVL %B1,00000110B ; переводим DATA на чтение
+        
+IT:     ; ждем 1
+        BTTH %A1,0001B
+        JZ IT;
+        
+        JSR WAIT1 ; ожидаем приход стопового бита
+
+
+        MOVL %C7,255   ; ждем 0
+AWA1:   BTTH %A1,0001B
+        JZ WEX
+        NOP
+        NOP
+        NOP
+        NOP
+        NOP
+        DEC %C7
+        JNZ AWA1
+
+WEX:    MOV %C1,%A1
+        BTTL %C1,1000B ; проверяем стоповый бит
+                       ; только непонятно, зачем 
+
+HT:     ; ждем 1
+        BTTH %A1,0001B
+        JZ HT;
+        RTS        
+
+ERROR:  MOVL %C3,0
+
+WAIT:   MOV %C1,%A1    ; ждем 1
+        BTTH %C1,0001B
+        JZ WAIT;
+        RTS
+WAIT1:  MOVL %C7,255   ; ждем 0
+WAI1:   MOV %C1,%A1
+        BTTH %C1,0001B
+        JZ EXIT1
+        NOP
+        NOP
+        NOP
+        NOP
+        NOP
+        DEC %C7
+        JNZ WAI1
+        JMP ERROR
+EXIT1:  RTS
+
+; ********************
+
+WRFLSH: LDR #B,56  ; адрес регистра управления блока ЭСППЗУ данных
+        MOVL %B1,0 ; адрес ячейки = 0 (используем только один байт)
+        MOV %B7,%D0
+        MOVL %B0,00000001B
+WRF1:   BTTL %B0,0001B
+        JNZ WRF1 ; ждем, пока происходит запись
+        LDR #B,18H
+        RTS
+
+; ********************
+
+RDFLSH: LDR #B,56  ; адрес регистра управления блока ЭСППЗУ данных
+        MOVL %B1,0 ; адрес ячейки = 0 (используем только один байт)
+        MOVL %B0,00000010B
+RDF1:   BTTL %B0,0010B
+        JNZ RDF1 ; ждем, пока происходит чтение
+        MOV %D0,%B7
+        LDR #B,18H
+        RTS
+
+; ********************
+INIT:   MOVL %B1,00111011B ; Установка конфигурации порта A
+        MOVL %B1,00000110B
+        MOVL %B1,00011111B
+        MOVL %B1,00000000B
+        MOVL %B1,00000000B
+        MOVL %B1,00000001B ; прерывание по отрицательному перепаду уровня
+                           ; на линии CLK_KEY  для опроса клавиатуры
+
+        STIE
+
+        MOVL %B2,00011011B ; Установка конфигурации порта B
+        MOVL %B2,11111111B
+        MOVL %B2,11111111B
+        MOVL %B2,0
+        MOVL %B2,0
+        MOVL %B2,0
+
+        BISL %A1,0010B     ; выдаем 1 на линию сброса регистров в ПЛИС
+        BICL %A1,0100B     ; выдаем 0 на линию STROBE
+
+        MOVL %D5,0         ; флажок (потом пригодится)
+        RTS
+
+KEYINI:                   ; инициализация матрицы клавиатуры
+        LDR #B,72         ; весь буфер из 5-и байтов заполняем
+        MOVL %B0,11111111B ; значениями 255
+        MOVL %B1,11111111B
+        MOVL %B2,11111111B
+        MOVL %B3,11111111B
+        MOVL %B4,11111111B
+        LDR #B,18H
+        JSR VYVOD
+        RTS
+
+; здесь надо бы отключать клавиатуру - потом поправлю
+
+MOUSINI:CLIE ; DI
+        
+        LDR #B,72
+        MOVL %B5,125
+        MOVL %B6,127
+        MOVL %B7,255
+        LDR #B,18H
+
+        JSR RMZ00
+
+
+        JSR WAIT          
+
+                           ; мышь подключили. Теперь ожидаем ее готовность
+                           ; Теперь нужно передать в мышь команду запроса
+                           ; ее состояния (здесь неудобно использовать
+                           ; потоковый режим, хотя, в принципе, можно)
+
+        MOVL %D4,3
+MR:     
+        MOVL %C3,0FFH
+        JSR WR_SC
+        JSR RMZ00
+        JSR MORE
+        JSR MORE
+
+MRR:    MOVL %C3,0F4H
+        JSR WR_SC
+        JSR MORE
+                
+        MOVL %C3,11110000B ; код команды перехода в REMOTE MODE
+        JSR WR_SC
+        JSR MORE           ; принимаем код подтверждения 
+        CMPL %C3,11111010B 
+        JZ MRR1
+        DEC %D4
+        JNZ  MR
+
+        JMP MOUSOFF     ;MOUSOFF       
+
+MRR1:   MOVL %D4,0
+;       MOVL %C3,11110011B
+;       JSR WR_SC
+;       JSR MORE
+;       MOVL %C3,80
+;       JSR WR_SC
+;       JSR MORE        
+
+        MOVL %C3,11101000B
+        JSR WR_SC
+        JSR MORE
+        MOVL %C3,0
+        JSR WR_SC
+        JSR MORE
+
+        RTS
+
+REZET:  BICL %A1,0010B 
+        NOP
+        NOP
+        BISL %A1,0100B
+        
+        MOVL %C3,50
+        JSR RMZ01
+
+        BICL %A1,0100B   
+        NOP
+        NOP
+        BISL %A1,0010B 
+        RTS
+
+REZT:   JSR REZET
+        RST
+        JMP START
+
+MOUSOFF:MOVL %D4,255
+        LDR #B,72
+        MOVL %B5,255
+        MOVL %B6,255
+        MOVL %B7,255
+        LDR #B,18H
+
+        RTS
+
+TIMER:                     ; мышку будем опрашивать по прерываниям от таймера
+        MOVL %A4,00010010B ; подключаем регистр конфигурации к адресу 5 
+        MOVL %A5,01001111B ; задаем коэффициент деления тактовой частоты 1/256
+        MOVL %A4,00000010B ; подключаем регистр интервала (LOW) к адресу 5
+        MOVL %A5,70
+        MOVL %A4,00000110B ; подключаем регистр интервала (HI) к адресу 5
+        MOVL %A5,0         ; итак, получили полный коэффициент
+                           ; деления 128*(2?4?*256+113)=80000, прерывания от
+                           ; таймера будут идти с частотой Fтакт/80000=100 Гц
+        MOVL %A4,00000011B ; пускаем таймер на счет
+        STIE               ; разрешаем прерывания
+        RTS
+
+
+STERR:  RST
+        JMP MAIN
+           
+SCODE:  .BYTE 12H,1CH,15H,16H,45H,4DH,5AH,29H
+        .EVEN; байт 0: CS,A,Q,1,0,P,ENT,SPACE
+
+        .BYTE 1AH,1BH,1DH,1EH,46H,44H,4BH,11H
+        .EVEN; байт 1: Z,S,W,2,9,O,L,SS
+
+        .BYTE 22H,23H,24H,26H,3EH,43H,42H,3AH
+        .EVEN; байт 2: X,D,E,3,8,I,K,M
+
+        .BYTE 21H,2BH,2DH,25H,3DH,3CH,3BH,31H
+        .EVEN; байт 3: C,F,R,4,7,U,J,N
+
+        .BYTE 2AH,34H,2CH,2EH,36H,35H,33H,32H
+        .EVEN; байт 4: V,G,T,5,6,Y,H,B
+
+RMZ00:  MOVL %C3,155
+RMZ01:  JSR RMZ0
+        DEC %C3
+        JNZ RMZ01
+        RTS
+RMZ0:   MOVL %C4,255
+RMZ1:   MOVL %C5,45
+RMZ2:   DEC %C5
+        JNZ RMZ2
+        DEC %C4
+        JNZ RMZ1
+        RTS
+
+.END;

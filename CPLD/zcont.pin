@@ -1,0 +1,115 @@
+-- Copyright (C) 1988-2000 Altera Corporation
+-- Any megafunction design, and related net list (encrypted or decrypted),
+-- support information, device programming or simulation file, and any other
+-- associated documentation or information provided by Altera or a partner
+-- under Altera's Megafunction Partnership Program may be used only to
+-- program PLD devices (but not masked PLD devices) from Altera.  Any other
+-- use of such megafunction design, net list, support information, device
+-- programming or simulation file, or any other related documentation or
+-- information is prohibited for any other purpose, including, but not
+-- limited to modification, reverse engineering, de-compiling, or use with
+-- any other silicon devices, unless such use is explicitly licensed under
+-- a separate agreement with Altera or a megafunction partner.  Title to
+-- the intellectual property, including patents, copyrights, trademarks,
+-- trade secrets, or maskworks, embodied in any such megafunction design,
+-- net list, support information, device programming or simulation file, or
+-- any other related documentation or information provided by Altera or a
+-- megafunction partner, remains with Altera, the megafunction partner, or
+-- their respective licensors.  No other licenses, including any licenses
+-- needed under any third party's intellectual property, are provided herein.
+
+
+
+N.C. = No Connect. This pin has no internal connection to the device.
+VCCINT = Dedicated power pin, which MUST be connected to VCC (5.0 volts).
+VCCIO = Dedicated power pin, which MUST be connected to VCC (5.0 volts).
+GND = Dedicated ground pin or unused dedicated input, which MUST be connected to GND.
+RESERVED = Unused I/O pin, which MUST be left unconnected.
+
+----------------------------------------------------------------------------
+
+CHIP "zcont" ASSIGNED TO AN EPM7128SLC84-6
+restrig                          : 1
+sdtakt                           : 2
+VCCINT                           : 3
+adr1                             : 4
+adr2                             : 5
+dbus3                            : 6
+GND                              : 7
+adr3                             : 8
+dbus4                            : 9
+dbus5                            : 10
+rd                               : 11
+iorq                             : 12
+VCCIO                            : 13
+TDI                              : 14
+m1                               : 15
+adr4                             : 16
+readonly                         : 17
+adr6                             : 18
+GND                              : 19
+sddatain                         : 20
+adr5                             : 21
+a10                              : 22
+TMS                              : 23
+a8                               : 24
+nmi                              : 25
+VCCIO                            : 26
+a9                               : 27
+sdabsent                         : 28
+a11                              : 29
+wr                               : 30
+sdcs                             : 31
+GND                              : 32
+data3                            : 33
+data7                            : 34
+data6                            : 35
+iorqce                           : 36
+sddatao                          : 37
+VCCIO                            : 38
+ebl                              : 39
+sdpower                          : 40
+ior                              : 41
+GND                              : 42
+VCCINT                           : 43
+iow                              : 44
+rdh                              : 45
+data5                            : 46
+GND                              : 47
+data2                            : 48
+data1                            : 49
+data4                            : 50
+magic0                           : 51
+magic1                           : 52
+VCCIO                            : 53
+wrh                              : 54
+reso                             : 55
+data0                            : 56
+RESERVED                         : 57
+adr7                             : 58
+GND                              : 59
+RESERVED                         : 60
+RESERVED                         : 61
+TCK                              : 62
+RESERVED                         : 63
+sdtakto                          : 64
+RESERVED                         : 65
+VCCIO                            : 66
+dbus7                            : 67
+dbus1                            : 68
+dbus6                            : 69
+a15                              : 70
+TDO                              : 71
+GND                              : 72
+a14                              : 73
+a12                              : 74
+RESERVED                         : 75
+a13                              : 76
+dos                              : 77
+VCCIO                            : 78
+dbus0                            : 79
+dbus2                            : 80
+RESERVED                         : 81
+GND                              : 82
+strobe                           : 83
+adr0                             : 84

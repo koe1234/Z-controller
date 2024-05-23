@@ -1,0 +1,219 @@
+% 	Z-controller by KOE	  %
+
+Title "Zcont";
+Subdesign Zcont
+
+(
+adr0, adr1, adr2, adr3, adr4, adr5, adr6, adr7, a[15..8], data[7..0], strobe,
+restrig, iorq, rd, m1, dos, wr, sdtakt, sddatain, sdabsent, readonly, magic0  : input;		
+
+dbus[7..0], reso, nmi, iorqce: bidir;
+ebl, sdtakto, sddatao, sdcs, sdpower,
+iow, wrh, ior, rdh, magic1: output;
+)
+
+Variable
+
+mousex[7..0], mousey[7..0], mousebut[2..0], keyd0[7..0],
+keyd1[7..0], keyd2[7..0], keyd3[7..0], keyd4[7..0], counter[7..0],
+sddatawr[7..0], sddatard[7..0],
+sdcontrwr[1..0], sdcounter[3..0],  
+ sddel[4..0],  starttr, starttr1, stoptr, synchrotrig[1..0]: dff;
+
+d[7..0],  res, nmib, ioro: tri;
+
+notstrobe, var1, var2, datakey[4..0], portmx, portmy, portmb,
+portkey, iow, ior, wrh, rdh, eblior, naher, datasd,
+contrsd, %wrdatasd,% rddatasd, rdsdcontr, mniv, wrdatasd, iorqcc, sdtakt1, sdtakt2,
+sdstrobe, sdtakto0, sdcount : node;
+
+Begin
+
+sddel0.clk=sdtakt;
+sddel0.d=not(sddel0.q);
+
+sddel1.clk=sddel0.q;
+sddel1.d=not(sddel1.q);
+
+sddel2.clk=sddel1.q;
+sddel2.d=not(sddel2.q);
+
+sddel3.clk=sddel2.q;
+sddel3.d=not(sddel3.q);
+
+sddel4.clk=sddel3.q;
+sddel4.d=not(sddel4.q);
+
+sdtakt1=sdtakt;
+
+notstrobe=not(strobe);
+counter[0].d=not(counter[7].q); counter[7..1].d=counter[6..0].q;
+counter[7..0].clk=notstrobe;
+counter[7..0].clrn=restrig;
+
+% Заполняем буфера в порядке очереди с каждым фронтом сигнала strobe %
+keyd0[7..0].d=data[7..0]; keyd1[7..0]=data[7..0];
+keyd2[7..0].d=data[7..0]; keyd3[7..0]=data[7..0]; keyd4[7..0]=data[7..0];
+mousex[7..0].d=data[7..0]; mousey[7..0].d=data[7..0]; mousebut[2..0].d=data[2..0];
+keyd0[7..0].clk=counter[0].q;
+keyd1[7..0].clk=counter[1].q;
+keyd2[7..0].clk=counter[2].q;
+keyd3[7..0].clk=counter[3].q;
+keyd4[7..0].clk=counter[4].q;
+mousebut[2..0].clk=counter[7].q;
+mousex[7..0].clk=counter[5].q;
+mousey[7..0].clk=counter[6].q;
+
+% Имитируем замыкание кнопочек Спектрума ...
+ А вот отсюда начинается изврат :( 		%
+
+datakey[0] = (keyd0[0].q or a[8]) and (keyd0[1].q or a[9]) and (keyd0[2].q or a[10]) and (keyd0[3].q or a[11]) and (keyd0[4].q or a[12]) and (keyd0[5].q or a[13]) and (keyd0[6].q or a[14]) and(keyd0[7].q or a[15]);
+datakey[1] = (keyd1[0].q or a[8]) and (keyd1[1].q or a[9]) and (keyd1[2].q or a[10]) and (keyd1[3].q or a[11]) and (keyd1[4].q or a[12]) and (keyd1[5].q or a[13]) and (keyd1[6].q or a[14]) and(keyd1[7].q or a[15]);
+datakey[2] = (keyd2[0].q or a[8]) and (keyd2[1].q or a[9]) and (keyd2[2].q or a[10]) and (keyd2[3].q or a[11]) and (keyd2[4].q or a[12]) and (keyd2[5].q or a[13]) and (keyd2[6].q or a[14]) and(keyd2[7].q or a[15]);
+datakey[3] = (keyd3[0].q or a[8]) and (keyd3[1].q or a[9]) and (keyd3[2].q or a[10]) and (keyd3[3].q or a[11]) and (keyd3[4].q or a[12]) and (keyd3[5].q or a[13]) and (keyd3[6].q or a[14]) and(keyd3[7].q or a[15]);
+datakey[4] = (keyd4[0].q or a[8]) and (keyd4[1].q or a[9]) and (keyd4[2].q or a[10]) and (keyd4[3].q or a[11]) and (keyd4[4].q or a[12]) and (keyd4[5].q or a[13]) and (keyd4[6].q or a[14]) and(keyd4[7].q or a[15]);
+
+% Дешифрируем порты %
+
+portkey = (not ebl) or adr0 or rd; 
+portmx = (not dos) or adr5 or a[10] or not(adr6) or not(a[8]) or not(adr7);
+portmy = (not dos) or (adr6 nand a[10]) or adr5 or not(adr7);
+portmb = (not dos) or adr5 or a[8] or a[10] or (not adr6) or not(adr7);
+
+% Блокируем прохождение iorq в основную плату %
+
+iorqcc = not(portmx and portmy and portmb and portkey and datasd and contrsd and ebl);
+ioro.in = iorqcc;
+ioro.oe = iorqcc;
+iorqce = ioro.out;
+
+% Гадим в шину данных %
+
+if not (adr0 or rd or iorq) then d[4..0].in = datakey[4..0]; d[7..5].in = vcc; end if;
+if not (portmx or iorq or rd) then d[7..0].in = mousex[7..0].q; end if;
+if not (portmy or iorq or rd) then d[7..0].in = mousey[7..0].q; end if;
+if not (portmb or iorq or rd) then d[2..0].in = mousebut[2..0].q; d[7..3].in=vcc; end if;
+
+dbus[7..0] = d[7..0].out;
+d[7..0].oe = not((portmx and portmy and portmb and portkey and rddatasd and rdsdcontr) or iorq or rd);
+
+% reset %
+
+naher = (restrig or strobe);
+res.in = naher;
+res.oe = not(naher);
+reso = res.out;
+ 
+% NMI %
+
+mniv = restrig or not(data[0]);
+
+nmib.in = gnd;
+nmib.oe = gnd;
+nmi = nmib.out; % раньше хотел просто сделать NMI по нажатию magic,
+потом понял, что без подключения ПЗУ TR-DOS такие фокусы не пройдут,
+отказался от такого подхода, поэтому выход MNI всегда в Z-состоянии%
+
+
+
+if not(mniv) then magic1 = magic0; else magic1 =vcc; end if;
+
+% SPI Interface for ZX-Spectrum ver. 1.0 by KOE %
+
+% Порты: 	SD CONTROL: 77h
+			SD DATA:	57h %
+
+contrsd = (adr0 nand dos) or adr7 or not(adr6) or not(adr5) %or adr3 or not(adr2)% or not(adr1);
+datasd = (adr0 nand dos) or adr7 or not(adr6) or adr5 %or adr3 or not(adr2)% or not(adr1);
+
+--contrsd = (adr0 nand dos) or adr7 or not (adr6 and adr5 %and adr4 and adr3 %and adr2 and adr1 and adr0);
+--datasd = (adr0 nand dos) or adr7 or adr6 or not (adr5 %and adr4 and adr3%and adr2 and adr1);
+
+wrdatasd = datasd or wr or iorq;
+
+% Фиксируем конец цикла записи в порт %
+
+starttr.clk = wrdatasd and rddatasd;
+starttr.d = vcc;
+starttr.clrn = stoptr.q;
+
+% синхронизируемся с клоком SPI %
+
+starttr1.clk = sdtakt1;
+starttr1.d=starttr.q;
+starttr1.clrn=stoptr.q;
+
+% Остановка %
+
+stoptr.clk = not(sdcount);
+stoptr.d = gnd;
+stoptr.prn = wrdatasd and rddatasd;
+
+sdstrobe = starttr1.q and stoptr.q;
+
+sdtakto=sdstrobe and sdtakt1;
+
+% Счетчик тактов для SD-карты (отсчитывает 8 тактов) %
+
+sdcounter[].clk=not(sdtakto) and sdcount;
+sdcounter[].d=sdcounter[].q - 1;
+sdcounter[].prn=starttr1.q;
+
+sdcount = sdcounter[3].q;
+
+% Строб защелкивания данных в SPI %
+
+synchrotrig0.d=not(wrdatasd);
+synchrotrig0.clk=stoptr.q;
+synchrotrig0.clrn=not(synchrotrig1.q);
+
+synchrotrig1.clk=not(sdtakt1);
+synchrotrig1.d=synchrotrig0.q;
+
+
+% Принимаем данные в сдвигающий регистр и пихаем их в SD-карту %
+
+if not(sdstrobe) then 
+	if not(wrdatasd)  then
+ 		sddatawr[].clk =  synchrotrig0.q; 
+		sddatawr[7..0].d = dbus[7..0]; else sddatawr[].clk=gnd;
+	end if;	 % параллельная погрузка %
+else 	sddatawr[7..1].d=sddatawr[6..0].q;
+		sddatawr[7..1].clk = not(sdtakt1); 	
+			sddatawr[0].clk=gnd;  %сдвиг %
+end if;
+
+sddatao=sddatawr[7].q;
+
+% Схватываем данные из SD-карты %
+
+sddatard[7..1].d = sddatard[6..0].q;
+sddatard[0].d = sddatain;
+sddatard[].clk = sdtakto;
+
+rddatasd = datasd or rd or iorq;
+if not (rddatasd) then d[7..0].in = sddatard[7..0].q; end if;
+
+sdcontrwr[].clk = not(contrsd or iorq or wr);
+sdcontrwr[1..0].d = dbus[1..0];
+sdcontrwr[].clrn = reso;
+sdpower = not(sdcontrwr[0].q);
+sdcs = sdcontrwr[1].q;
+
+rdsdcontr = contrsd or iorq or rd;
+if not(rdsdcontr) then 	d[0].in = sdabsent;
+						d[1].in = readonly;
+end if;
+
+% IDE по схеме Nemo % 
+
+ebl = (m1 nand dos) or adr1 or adr2;
+
+eblior = ebl or iorq;
+
+iow= eblior or adr0 or wr or (not rd);
+wrh = eblior or wr or (adr0 nand rd);
+ior = eblior or adr0 or rd or (not wr);
+rdh = eblior or rd or (wr nand adr0);
+ 
+end;
