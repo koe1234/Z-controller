@@ -1,0 +1,1 @@
+Z-controller is a project developed for a free non-commercial usage. Manufacturing or modification of any part of this project for non-commercial purposes is allowed with reference to the project author. Commercial usage is not allowed.
